@@ -7,6 +7,10 @@ three columns in ``prepare``:
 * ``sl_dist`` : stop-loss distance in price units (> 0 when signal != 0)
 * ``tp_dist`` : take-profit distance in price units (> 0 when signal != 0)
 
+``prepare`` must return one row per input bar, in the same order, keeping the
+input columns — the backtester aligns its arrays positionally and reads the
+per-bar ``spread`` column from them.
+
 Both the backtester and the live engine call exactly the same ``prepare`` so a
 strategy behaves identically in simulation and production.
 """

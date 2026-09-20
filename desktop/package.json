@@ -1,0 +1,38 @@
+{
+  "name": "xauusd-bot-desktop",
+  "version": "0.1.0",
+  "description": "Desktop control panel for the XAUUSD Asian-range breakout bot (setup, config, start/stop, live log, journal).",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^44.4.3",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.botxau.desktop",
+    "productName": "XAUUSD Bot",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "lib/**/*", "renderer/**/*", "package.json"],
+    "extraResources": [
+      {
+        "from": "..",
+        "to": "botxau",
+        "filter": [
+          "bot/**/*",
+          "scripts/**/*",
+          "installer/configure.py",
+          "config.example.yaml",
+          "requirements.txt",
+          "docs/**/*",
+          "README.md"
+        ]
+      }
+    ],
+    "win": { "target": "nsis" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true }
+  }
+}

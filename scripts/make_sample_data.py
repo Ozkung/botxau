@@ -30,10 +30,17 @@ def synthetic_bars(days: int = 250, start_price: float = 2400.0, seed: int = 7, 
     wick = np.abs(rng.normal(0, 0.8, size=len(idx))) * vol
     high = np.maximum(open_, close) + wick
     low = np.minimum(open_, close) - np.abs(rng.normal(0, 0.8, size=len(idx))) * vol
+    # spread in POINTS (as MT5 writes it): ~0.18-0.32 USD normally, far wider at
+    # the 21:00-23:00 UTC rollover and on the occasional news bar
+    spread_pts = rng.integers(18, 33, size=len(idx)).astype(float)
+    spread_pts *= np.where((hours >= 21) & (hours < 23), rng.uniform(3.0, 8.0, size=len(idx)), 1.0)
+    news = rng.random(len(idx)) < 0.01
+    spread_pts = np.where(news, spread_pts * rng.uniform(2.0, 6.0, size=len(idx)), spread_pts)
     df = pd.DataFrame({
         "time": idx + pd.Timedelta(hours=server_offset),
         "open": open_.round(2), "high": high.round(2), "low": low.round(2), "close": close.round(2),
-        "tick_volume": rng.integers(200, 3000, size=len(idx)), "spread": 25,
+        "tick_volume": rng.integers(200, 3000, size=len(idx)),
+        "spread": spread_pts.round().astype(int),
     })
     return df
 

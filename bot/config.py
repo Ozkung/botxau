@@ -36,13 +36,19 @@ class RiskConfig:
 @dataclass
 class BacktestConfig:
     initial_balance: float = 10_000.0
-    spread: float = 0.25                # assumed constant spread (price units)
+    spread: float = 0.25                # fallback spread (price units) when no per-bar value
+    spread_source: str = "csv"          # "csv" = use the per-bar spread column | "fixed" = always use `spread`
+    digits: int = 2                     # price digits; converts the CSV spread column (points) to price units
     commission_per_lot: float = 7.0     # round-trip USD per 1.00 lot
     contract_size: float = 100.0        # 1 lot XAUUSD = 100 oz
     volume_min: float = 0.01
     volume_step: float = 0.01
     volume_max: float = 50.0
     server_utc_offset: int = 2          # hours; CSV timestamps are broker-server time
+
+    def __post_init__(self) -> None:
+        if self.spread_source not in ("csv", "fixed"):
+            raise ValueError('backtest.spread_source must be "csv" or "fixed"')
 
 
 @dataclass

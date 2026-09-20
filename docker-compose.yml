@@ -1,0 +1,47 @@
+# Backtesting/tooling only - the live bot cannot run in Docker.
+#
+# scripts/run_live.py needs the MetaTrader5 package (Windows-only) and a
+# running MT5 desktop terminal it talks to over IPC, not a network API.
+# There's no service here for it. See README.md's Docker section and
+# desktop/README.md for how the bot actually runs (the Electron app, on
+# Windows, next to a logged-in MT5 terminal).
+#
+# Usage (each one runs once and exits - these are tools, not servers):
+#   cp config.example.yaml config.yaml        # first time only
+#   docker compose run --rm test               # pytest -q
+#   docker compose up sample-data backtest     # generate data, then backtest it
+#   docker compose run --rm doctor             # config/environment checks (no MT5)
+#   docker compose run --rm backtest python scripts/run_backtest.py --csv data/XAUUSD_M15.csv --config config.yaml --out results
+services:
+  test:
+    build: .
+    command: ["python", "-m", "pytest", "-q"]
+
+  sample-data:
+    build: .
+    volumes:
+      - ./data:/app/data
+    # 250 days matches what docs/README use as the quick sanity-check size;
+    # override with `docker compose run --rm sample-data python scripts/make_sample_data.py --days 365`
+    command: ["python", "scripts/make_sample_data.py", "--days", "250", "--out", "data/sample_M15.csv"]
+
+  backtest:
+    build: .
+    depends_on:
+      sample-data:
+        condition: service_completed_successfully
+    volumes:
+      - ./data:/app/data
+      - ./results:/app/results
+      - ./config.yaml:/app/config.yaml:ro
+    command: ["python", "scripts/run_backtest.py", "--csv", "data/sample_M15.csv", "--config", "config.yaml", "--out", "results"]
+
+  doctor:
+    build: .
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+    # --skip-mt5 always applies here regardless of platform: this container
+    # is Linux, and even on a Windows host, Docker Desktop's Linux VM can't
+    # reach a GUI MT5 terminal running outside it.
+    command: ["python", "scripts/doctor.py", "--config", "config.yaml", "--skip-mt5"]

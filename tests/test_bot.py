@@ -27,7 +27,8 @@ PARAMS = dict(trend_ema=20, atr_period=5, min_range_atr=0.5, max_range_atr=20, s
               sl_atr_mult=1.0, sl_min_atr=0.1, sl_max_atr=10, rr=2.0, breakout_buffer_atr=0.0)
 
 
-def scenario(breakout_close: float = 2012.0, after: list[float] | None = None) -> pd.DataFrame:
+def scenario(breakout_close: float = 2012.0, after: list[float] | None = None,
+             spread_points: list[int] | None = None) -> pd.DataFrame:
     """Two days of M15 bars: day 1 warm-up uptrend; day 2 range 2000-2010 then breakout."""
     rows = []
     t0 = pd.Timestamp("2026-01-05 16:00")  # warm-up after day-1 trade window -> no day-1 signals
@@ -49,6 +50,9 @@ def scenario(breakout_close: float = 2012.0, after: list[float] | None = None) -
         prev = rows[-1][4]
         rows.append((tt, prev, max(prev, c) + 0.3, min(prev, c) - 0.3, c))
     df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close"])
+    if spread_points is not None:  # pad/trim to length, MT5-style points column
+        pts = (spread_points + [spread_points[-1]] * len(df))[: len(df)]
+        df["spread"] = pts
     return normalise(df, server_utc_offset=0)
 
 
@@ -145,6 +149,70 @@ def test_backtest_runs_on_synthetic_year():
     assert tr.groupby(tr.entry_time.dt.date).size().max() <= cfg.risk.max_trades_per_day
 
 
+def test_r_multiple_is_net_of_commission():
+    s = create_strategy("session_breakout", PARAMS)
+    df = scenario(2012.0, after=[2014, 2018, 2025, 2040])
+    risk = RiskConfig(breakeven_at_r=None, force_close_utc=None)
+    free = run_backtest(df, s, risk, _bt_cfg()).trades.iloc[0]
+    paid = run_backtest(df, s, risk, _bt_cfg(commission_per_lot=50.0)).trades.iloc[0]
+    assert free.r_multiple == pytest.approx(2.0)
+    assert paid.r_multiple < free.r_multiple      # commission eats into R, not just into pnl
+    risk_usd = paid.risk_dist * paid.lots * 100.0
+    assert paid.r_multiple == pytest.approx(paid.pnl / risk_usd)
+
+
+def test_drawdown_counts_open_position_not_just_closed_trades():
+    """A single winning trade that dipped underwater has 0% closed DD but a real one."""
+    s = create_strategy("session_breakout", PARAMS)
+    df = scenario(2012.0, after=[2011.0, 2014, 2018, 2025, 2040])
+    res = run_backtest(df, s, RiskConfig(breakeven_at_r=None, force_close_utc=None), _bt_cfg())
+    assert res.stats["trades"] == 1 and res.trades.iloc[0].exit_reason == "tp"
+    assert res.stats["max_drawdown_closed_pct"] == 0.0
+    assert res.stats["max_drawdown_pct"] > 0.0
+    assert list(res.equity.columns) == ["time_utc", "balance", "equity"]
+    assert res.equity.equity.min() < res.equity.balance.min()
+
+
+def test_backtest_uses_per_bar_spread_from_csv():
+    s = create_strategy("session_breakout", PARAMS)
+    # 20 points = $0.20 everywhere except the entry bar (the one AFTER the signal)
+    df = scenario(2012.0, after=[2014, 2018, 2025, 2040], spread_points=[20])
+    entry_bar = len(df) - 4
+    df.loc[entry_bar, "spread"] = 35  # $0.35, still under max_spread
+    risk = RiskConfig(breakeven_at_r=None, force_close_utc=None, max_spread=0.40)
+
+    from_csv = run_backtest(df, s, risk, _bt_cfg(spread_source="csv")).trades.iloc[0]
+    fixed = run_backtest(df, s, risk, _bt_cfg(spread_source="fixed", spread=0.20)).trades.iloc[0]
+    assert from_csv.entry == pytest.approx(fixed.entry + 0.15)  # 35 pts vs 20 pts on a long
+
+
+def test_wide_csv_spread_blocks_entry_like_live():
+    s = create_strategy("session_breakout", PARAMS)
+    df = scenario(2012.0, after=[2014, 2018, 2025, 2040], spread_points=[20])
+    signal_bar = len(df) - 5
+    df.loc[signal_bar, "spread"] = 90  # $0.90 > max_spread 0.40
+    risk = RiskConfig(breakeven_at_r=None, force_close_utc=None, max_spread=0.40)
+
+    res = run_backtest(df, s, risk, _bt_cfg(spread_source="csv"))
+    assert res.stats["trades"] == 0
+    assert res.stats["signals_skipped"]["spread too wide"] == 1
+    # the same bars with a fixed narrow spread still trade -> the block came from the column
+    assert run_backtest(df, s, risk, _bt_cfg(spread_source="fixed", spread=0.20)).stats["trades"] == 1
+
+
+def test_spread_falls_back_when_column_missing_or_disabled():
+    s = create_strategy("session_breakout", PARAMS)
+    df = scenario(2012.0, after=[2014, 2018, 2025, 2040])  # no spread column at all
+    res = run_backtest(df, s, RiskConfig(breakeven_at_r=None, force_close_utc=None), _bt_cfg(spread=0.2))
+    assert res.stats["spread_model"]["source"].startswith("fixed")
+    assert res.trades.iloc[0].entry == pytest.approx(df.open.iloc[-4] + 0.2)
+
+
+def test_spread_source_must_be_valid():
+    with pytest.raises(ValueError):
+        BacktestConfig(spread_source="whatever")
+
+
 # --- live engine with a fake broker ---------------------------------------
 class FakeBroker(Broker):
     def __init__(self, bars: pd.DataFrame, bid: float, spread: float = 0.2, equity: float = 10_000):
@@ -221,3 +289,129 @@ def test_engine_moves_stop_to_breakeven():
                       time_server=pd.Timestamp("2026-01-06 07:15"))]
     _engine(b, breakeven_at_r=1.0, force_close_utc=None).step()
     assert b.modified == [(7, 2010.0, 2020.0)]
+
+
+# --- installer ------------------------------------------------------------
+sys.path.insert(0, str(ROOT / "installer"))
+from configure import as_yaml, build, set_value  # noqa: E402
+
+TEMPLATE = (ROOT / "config.example.yaml").read_text(encoding="utf-8")
+
+
+def test_configure_writes_values_and_keeps_comments():
+    out = build({"symbol": "XAUUSDm", "risk": 0.25, "dry_run": False, "max_spread": 0.6}, TEMPLATE)
+    cfg = load_config_from_text(out)
+    assert cfg.symbol == "XAUUSDm" and cfg.dry_run is False
+    assert cfg.risk.risk_per_trade_pct == 0.25 and cfg.risk.max_spread == 0.6
+    # untouched keys keep their defaults, and every comment survives
+    assert cfg.risk.max_trades_per_day == 2
+    assert out.count("#") == TEMPLATE.count("#")
+    assert "# some brokers use XAUUSDm" in out
+
+
+def test_configure_targets_the_right_section():
+    """`server_utc_offset` exists at top level AND under backtest - don't cross them."""
+    out = build({"server_utc_offset": 3}, TEMPLATE)
+    cfg = load_config_from_text(out)
+    assert cfg.backtest.server_utc_offset == 3
+    assert cfg.server_utc_offset == "auto"  # top-level one untouched
+
+
+def test_configure_quotes_awkward_values():
+    assert as_yaml("XAUUSD") == "XAUUSD"           # plain scalar, no quotes
+    assert as_yaml("abc:DEF-1") == '"abc:DEF-1"'   # a colon would break the YAML
+    assert as_yaml(None) == "null" and as_yaml(True) == "true"
+    cfg = load_config_from_text(build({"telegram_token": "123:AAE-xyz", "telegram_chat_id": "-1001234"}, TEMPLATE))
+    assert cfg.notify.telegram_token == "123:AAE-xyz"
+    assert cfg.notify.telegram_chat_id == "-1001234"  # group ids are negative: must not become an int
+
+
+def test_configure_keeps_digit_only_password_a_string():
+    """An all-digits MT5 password read back as an int would break mt5.initialize()."""
+    cfg = load_config_from_text(build({"mt5_password": "80412355", "mt5_login": 80412355}, TEMPLATE))
+    assert cfg.mt5.password == "80412355" and isinstance(cfg.mt5.password, str)
+    assert cfg.mt5.login == 80412355 and isinstance(cfg.mt5.login, int)
+
+
+def test_configure_handles_windows_paths():
+    out = build({"mt5_path": r"C:\Program Files\MetaTrader 5\terminal64.exe"}, TEMPLATE)
+    cfg = load_config_from_text(out)
+    assert cfg.mt5.path == r"C:\Program Files\MetaTrader 5\terminal64.exe"
+
+
+def test_configure_rejects_unknown_key_instead_of_appending():
+    with pytest.raises(KeyError):
+        build({"risk_per_trad_pct": 0.5}, TEMPLATE)
+    with pytest.raises(KeyError):
+        set_value(TEMPLATE.splitlines(), "risk", "no_such_key", 1)
+
+
+def load_config_from_text(text: str):
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as fh:
+        fh.write(text)
+    return load_config(fh.name)
+
+
+# --- export_state -----------------------------------------------------------
+sys.path.insert(0, str(ROOT / "scripts"))
+from export_state import build_state  # noqa: E402
+
+
+def test_export_state_reports_config_error_without_raising():
+    out = build_state(str(ROOT / "no-such-config.yaml"), limit=10)
+    assert "config_error" in out and "config" not in out
+
+
+def test_export_state_shape_with_empty_journal(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # journal_path in the config is relative
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text((ROOT / "config.example.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    out = build_state(str(cfg_path), limit=10)
+    assert out["config"]["symbol"] == "XAUUSD"
+    assert out["entries"] == [] and out["day_state"] == [] and out["today"] is None
+    assert out["trades_today"] == 0
+    assert out["kill_switch_active"] is False
+
+
+def test_export_state_reads_real_entries_and_today(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text((ROOT / "config.example.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    journal = Journal("data/journal.sqlite")
+    today = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
+    journal.day_start_equity(today, 10_000.0)
+    journal.record_entry(date_utc=today, signal_bar_utc=f"{today}T07:00:00", side="BUY", lots=0.1,
+                          price=2012.2, sl=2006.8, tp=2023.0, ticket=None, dry_run=True, ok=True,
+                          message="DRY_RUN", reason="asia_breakout_up")
+    journal.event("INFO", "bot started")
+
+    out = build_state(str(cfg_path), limit=10)
+    assert len(out["entries"]) == 1 and out["entries"][0]["side"] == "BUY"
+    assert out["today"]["start_equity"] == 10_000.0
+    assert out["trades_today"] == 1
+    assert len(out["events"]) == 1
+
+
+def test_export_state_kill_switch_flag_matches_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text((ROOT / "config.example.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    assert build_state(str(cfg_path), limit=10)["kill_switch_active"] is False
+    (tmp_path / "STOP").write_text("stopped", encoding="utf-8")
+    assert build_state(str(cfg_path), limit=10)["kill_switch_active"] is True
+
+
+def test_configure_round_trips_through_itself_as_template(tmp_path):
+    """The desktop app re-saves using config.yaml as its own template so an
+    unrelated field change (e.g. risk) doesn't wipe fields the form does not
+    resend, like the MT5 password."""
+    out = tmp_path / "config.yaml"
+    build_and_write = lambda values, template_text: out.write_text(build(values, template_text), encoding="utf-8")
+    build_and_write({"mt5_password": "secret123", "risk": 0.5}, TEMPLATE)
+    build_and_write({"risk": 0.3}, out.read_text(encoding="utf-8"))  # template = itself now
+
+    cfg = load_config_from_text(out.read_text(encoding="utf-8"))
+    assert cfg.mt5.password == "secret123"
+    assert cfg.risk.risk_per_trade_pct == 0.3
