@@ -3,23 +3,37 @@
 บอทเทรดทองคำ XAUUSD อัตโนมัติผ่าน MetaTrader 5 มี backtester ในตัว ใช้โค้ด strategy/risk ชุดเดียวกันทั้งตอน backtest และตอนเทรดจริง
 อ่านสถาปัตยกรรมและรายละเอียดกลยุทธ์ได้ที่ [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
-## ติดตั้งบน Windows (วิธีที่แนะนำ)
+## ติดตั้งบน Windows (วิธีที่แนะนำ): แอป Desktop
 
-ดาวน์โหลด repo นี้ลงเครื่อง Windows ที่ลง MT5 ไว้แล้ว **ดับเบิลคลิก `install.bat`**
+ตัวติดตั้งแบบ `.bat`/`.ps1` ถูกแทนที่ด้วยแอป **Electron** ใน [`desktop/`](desktop/) แล้ว หน้าตาแบ่งเป็น 4 แท็บ:
 
-ตัวติดตั้งจะหา Python 3.10+ ให้ สร้าง `.venv` ลงไลบรารีทั้งหมด (รวม `MetaTrader5`) ถามค่าที่จำเป็น (symbol ของโบรก, risk ต่อเทรด, จะส่งออเดอร์จริงไหม, Telegram) เขียน `config.yaml` ให้ วาง shortcut Start/Stop ไว้บน Desktop แล้วรัน preflight check กับ MT5 ที่เปิดอยู่
-
-รันซ้ำได้ปลอดภัย — `config.yaml` เดิมจะไม่ถูกทับถ้าไม่สั่ง และตัวติดตั้ง **ไม่เคยเริ่มเทรดเอง**
-
-| ไฟล์ | ทำอะไร |
+| แท็บ | ทำอะไร |
 |---|---|
-| `install.bat` | ติดตั้ง/ตั้งค่า (ดับเบิลคลิก) |
-| `installer\doctor.bat` | preflight check กับ MT5 — ไม่ส่งออเดอร์ |
-| `installer\start-bot.bat` | เริ่มบอท |
-| `installer\stop-bot.bat` | kill switch: สร้างไฟล์ `STOP` ห้ามเปิดออเดอร์ใหม่ |
-| `installer\install-task.ps1` | (ทางเลือก) ให้บอทขึ้นเองหลัง VPS รีบูต |
+| **Setup** | หา Python 3.10+, สร้าง `.venv`, ลงไลบรารีทั้งหมด (รวม `MetaTrader5`) — log สดระหว่างติดตั้ง |
+| **Configuration** | ฟอร์มเขียน `config.yaml` (symbol, risk, dry-run, MT5 login/server, Telegram) โดยคงคอมเมนต์เดิมไว้ครบ — บันทึกซ้ำได้โดยไม่ทับรหัสผ่านเดิมที่ตั้งไว้ |
+| **Dashboard** | ปุ่ม Start/Stop bot, kill switch (สร้าง/ลบไฟล์ `STOP`), รัน preflight check, ดู log สดของบอทที่รันอยู่ |
+| **Trades** | อ่าน `data/journal.sqlite` โดยตรง แสดงเทรดและ event ล่าสุด ไม่ต้องรอบอทรันอยู่ |
 
-> `stop-bot.bat` **ไม่ได้ปิด position ที่เปิดอยู่** และไม่ได้ฆ่าโปรเซส มันแค่ห้ามเปิดออเดอร์ใหม่ ส่วน position เดิมยังมี SL/TP ฝั่ง server คุ้มครองและบอทยังดูแลต่อ (breakeven, force close) ถ้าจะปิดเดี๋ยวนี้ให้ปิดใน MT5 เอง
+รันตอน dev:
+
+```bash
+cd desktop
+npm install
+npm start
+```
+
+Build เป็นตัวติดตั้ง Windows (NSIS):
+
+```bash
+cd desktop
+npm run dist
+```
+
+ปิดแอปขณะบอทกำลังรันอยู่ แอปจะถามก่อนเสมอว่าจะ "Stop bot and quit" หรือ "Leave running and quit" กันไม่ให้บอทค้างรันเงียบๆ โดยไม่มีหน้าต่างควบคุมเหลืออยู่ ดูรายละเอียดสถาปัตยกรรมของแอปที่ [`desktop/README.md`](desktop/README.md)
+
+ถ้าต้องการให้บอทขึ้นเองหลัง VPS รีบูตโดยไม่ต้องมีคนเปิดแอป (ไม่ผ่าน Electron) ยังใช้ `installer\install-task.ps1` ได้เหมือนเดิม — ดูข้อ 8 ใน `docs/ARCHITECTURE.md`
+
+> ปุ่ม **kill switch** ในแท็บ Dashboard **ไม่ได้ปิด position ที่เปิดอยู่** และไม่ได้ฆ่าโปรเซส มันแค่ห้ามเปิดออเดอร์ใหม่ ส่วน position เดิมยังมี SL/TP ฝั่ง server คุ้มครองและบอทยังดูแลต่อ (breakeven, force close) ถ้าจะปิดเดี๋ยวนี้ให้ปิดใน MT5 เอง ส่วนปุ่ม **Stop process** จะจบโปรเซสจริง — บน Windows เป็นการหยุดทันที (ไม่มี graceful shutdown ผ่าน signal เหมือน POSIX) ดู "Known limits" ใน `desktop/README.md`
 
 `scripts/doctor.py` ตรวจให้ตั้งแต่เวอร์ชัน Python, key ที่พิมพ์ผิดใน config, บัญชีเป็น demo หรือ real, Algo Trading เปิดหรือยัง, symbol มีจริงไหม (ถ้าไม่มีจะลิสต์ชื่อทองที่โบรกมีให้), filling mode, stops level, spread ตอนนี้เทียบ `max_spread`, offset เวลา server เทียบกับใน config, จำนวนแท่งย้อนหลังที่ดึงได้ และที่สำคัญที่สุด — **ล็อตที่บอทจะส่งจริงจากเงินในพอร์ตตอนนี้** ถ้าน้อยกว่าล็อตขั้นต่ำมันจะข้ามทุกสัญญาณ ซึ่งเป็นกับดักที่เจอบ่อยกับพอร์ตเล็ก
 

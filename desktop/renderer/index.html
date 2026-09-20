@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>XAUUSD Bot</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="titlebar">
+    <div class="titlebar-brand"><span class="dot"></span> XAUUSD Bot</div>
+    <div class="titlebar-meta" id="titlebar-meta">-</div>
+  </div>
+
+  <nav class="tabbar">
+    <button class="tab active" data-tab="setup">Setup</button>
+    <button class="tab" data-tab="config">Configuration</button>
+    <button class="tab" data-tab="dashboard">Dashboard</button>
+    <button class="tab" data-tab="trades">Trades</button>
+  </nav>
+
+  <main class="content">
+
+    <!-- ============================================================ Setup -->
+    <section class="panel active" id="tab-setup">
+      <p class="eyebrow">Getting started</p>
+      <h1 class="display">Setup</h1>
+      <p class="panel-lede">
+        Creates a Python virtual environment next to the bot and installs its dependencies,
+        including the Windows-only <code>MetaTrader5</code> package. Safe to re-run.
+      </p>
+
+      <div class="card">
+        <p class="card-title">Environment</p>
+        <div class="pill-row">
+          <span class="pill" id="pill-python"><span class="dot"></span>Python: checking...</span>
+          <span class="pill" id="pill-venv"><span class="dot"></span>Virtualenv: checking...</span>
+          <span class="pill" id="pill-platform"><span class="dot"></span>-</span>
+        </div>
+        <div class="btn-row">
+          <button class="btn-primary" id="btn-run-setup">Run setup</button>
+          <button class="btn-outline" id="btn-recheck-env">Re-check</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <p class="card-title">Setup log</p>
+        <p class="card-hint">Streams live while setup runs.</p>
+        <div class="console" id="console-setup" data-placeholder="Nothing yet - click Run setup."></div>
+      </div>
+    </section>
+
+    <!-- ========================================================= Config -->
+    <section class="panel" id="tab-config">
+      <p class="eyebrow">Config</p>
+      <h1 class="display">Configuration</h1>
+      <p class="panel-lede">
+        Writes <code>config.yaml</code> from <code>config.example.yaml</code>, keeping every comment
+        intact. Only the fields below are touched - the rest keep their documented defaults.
+      </p>
+
+      <div id="config-banner"></div>
+
+      <div class="card emphasized hidden" id="card-live-warning">
+        <p class="card-title">Dry-run is OFF</p>
+        <p class="card-hint" style="color: var(--color-ink-strong); margin-bottom: 0;">
+          The bot will send real orders to whatever account is logged into MT5 when it runs.
+          Keep dry-run ON until you've watched it on a demo account for weeks (see
+          docs/ARCHITECTURE.md section&nbsp;7).
+        </p>
+      </div>
+
+      <div class="card">
+        <p class="card-title">Trading</p>
+        <div class="field-grid">
+          <div class="field">
+            <label for="f-symbol">Symbol</label>
+            <input type="text" id="f-symbol" placeholder="XAUUSD" />
+            <p class="field-hint">As your broker names it: XAUUSD, XAUUSDm, GOLD, ...</p>
+          </div>
+          <div class="field">
+            <label for="f-risk">Risk per trade (%)</label>
+            <input type="number" id="f-risk" step="0.05" min="0" placeholder="0.5" />
+          </div>
+          <div class="field">
+            <label for="f-daily-loss">Max daily loss (%)</label>
+            <input type="number" id="f-daily-loss" step="0.1" min="0" placeholder="2.0" />
+          </div>
+          <div class="field">
+            <label for="f-max-spread">Max spread (USD)</label>
+            <input type="number" id="f-max-spread" step="0.01" min="0" placeholder="0.40" />
+          </div>
+          <div class="field span-2">
+            <label class="switch" for="f-dry-run" style="text-transform:none;">
+              <input type="checkbox" id="f-dry-run" checked />
+              <span class="track"></span>
+              <span class="switch-label">Dry-run (log signals only, send no orders)</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <p class="card-title">MetaTrader 5</p>
+        <p class="card-hint">Leave blank to use the account already logged into the running terminal.</p>
+        <div class="field-grid">
+          <div class="field span-2">
+            <label for="f-mt5-path">Terminal path</label>
+            <input type="text" id="f-mt5-path" placeholder="C:\Program Files\MetaTrader 5\terminal64.exe" />
+          </div>
+          <div class="field">
+            <label for="f-mt5-login">Login</label>
+            <input type="text" id="f-mt5-login" placeholder="12345678" />
+          </div>
+          <div class="field">
+            <label for="f-mt5-server">Server</label>
+            <input type="text" id="f-mt5-server" placeholder="Broker-Demo" />
+          </div>
+          <div class="field span-2">
+            <label for="f-mt5-password">Password</label>
+            <input type="password" id="f-mt5-password" placeholder="prefer leaving this blank" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <p class="card-title">Notifications &amp; misc</p>
+        <div class="field-grid">
+          <div class="field">
+            <label for="f-tg-token">Telegram bot token</label>
+            <input type="text" id="f-tg-token" placeholder="123456:AA..." />
+          </div>
+          <div class="field">
+            <label for="f-tg-chat">Telegram chat ID</label>
+            <input type="text" id="f-tg-chat" placeholder="-1001234567890" />
+          </div>
+          <div class="field">
+            <label for="f-utc-offset">Backtest server UTC offset</label>
+            <input type="number" id="f-utc-offset" step="1" placeholder="2" />
+          </div>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn-primary" id="btn-save-config">Save configuration</button>
+        <button class="btn-outline" id="btn-reload-config">Reload from disk</button>
+      </div>
+    </section>
+
+    <!-- ====================================================== Dashboard -->
+    <section class="panel" id="tab-dashboard">
+      <p class="eyebrow">Control</p>
+      <h1 class="display">Dashboard</h1>
+
+      <div id="dashboard-banner"></div>
+
+      <div class="card">
+        <p class="card-title">Status</p>
+        <div class="pill-row" id="status-pills">
+          <span class="pill">Mode: -</span>
+          <span class="pill">Symbol: -</span>
+          <span class="pill">Bot process: -</span>
+          <span class="pill">Kill switch: -</span>
+        </div>
+        <div class="btn-row">
+          <button class="btn-primary" id="btn-start-bot">Start bot</button>
+          <button class="btn-danger-outline" id="btn-stop-bot">Stop process</button>
+          <button class="btn-outline" id="btn-toggle-killswitch">Activate kill switch</button>
+          <button class="btn-outline" id="btn-run-doctor">Run preflight check</button>
+          <button class="btn-ghost" id="btn-refresh-state">Refresh</button>
+        </div>
+        <p class="field-hint" style="margin-top: var(--space-md);">
+          Stop process ends the bot; kill switch only blocks new entries and leaves any open
+          position alone (protected by its SL/TP on the broker side).
+        </p>
+      </div>
+
+      <div class="card">
+        <p class="card-title">Today (UTC)</p>
+        <div class="stat-grid" id="today-stats">
+          <div class="stat"><p class="stat-label">Trades today</p><p class="stat-value">-</p></div>
+          <div class="stat"><p class="stat-label">Start equity</p><p class="stat-value">-</p></div>
+          <div class="stat"><p class="stat-label">Max trades/day</p><p class="stat-value">-</p></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <p class="card-title">Preflight check</p>
+        <p class="card-hint">Runs scripts/doctor.py against the running MT5 terminal. Sends no orders.</p>
+        <div class="console" id="console-doctor" data-placeholder="Not run yet."></div>
+      </div>
+
+      <div class="card">
+        <div class="card-row">
+          <p class="card-title" style="margin-bottom:0;">Live log</p>
+          <button class="btn-ghost" id="btn-clear-log">Clear</button>
+        </div>
+        <p class="card-hint">Only shows output since this window started the bot process.</p>
+        <div class="console tall" id="console-bot" data-placeholder="The bot is not running."></div>
+      </div>
+    </section>
+
+    <!-- ========================================================= Trades -->
+    <section class="panel" id="tab-trades">
+      <p class="eyebrow">Journal</p>
+      <h1 class="display">Trades</h1>
+      <p class="panel-lede">Reads data/journal.sqlite directly - works whether or not the bot is currently running.</p>
+
+      <div class="btn-row" style="margin-bottom: var(--space-2xl);">
+        <button class="btn-outline" id="btn-refresh-trades">Refresh</button>
+        <button class="btn-ghost" id="btn-open-repo">Open bot folder</button>
+      </div>
+
+      <div class="card">
+        <p class="card-title">Recent entries</p>
+        <div id="trades-table-wrap">
+          <div class="empty-state">No trades yet.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <p class="card-title">Recent events</p>
+        <div id="events-list">
+          <div class="empty-state">No events yet.</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="app-footer">
+    <span class="fine-print" id="footer-repo">-</span>
+    <span class="fine-print"><strong>Not proven profitable.</strong> See docs/ARCHITECTURE.md section 7 before risking real money.</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -352,3 +352,66 @@ def load_config_from_text(text: str):
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as fh:
         fh.write(text)
     return load_config(fh.name)
+
+
+# --- export_state -----------------------------------------------------------
+sys.path.insert(0, str(ROOT / "scripts"))
+from export_state import build_state  # noqa: E402
+
+
+def test_export_state_reports_config_error_without_raising():
+    out = build_state(str(ROOT / "no-such-config.yaml"), limit=10)
+    assert "config_error" in out and "config" not in out
+
+
+def test_export_state_shape_with_empty_journal(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # journal_path in the config is relative
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text((ROOT / "config.example.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    out = build_state(str(cfg_path), limit=10)
+    assert out["config"]["symbol"] == "XAUUSD"
+    assert out["entries"] == [] and out["day_state"] == [] and out["today"] is None
+    assert out["trades_today"] == 0
+    assert out["kill_switch_active"] is False
+
+
+def test_export_state_reads_real_entries_and_today(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text((ROOT / "config.example.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    journal = Journal("data/journal.sqlite")
+    today = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
+    journal.day_start_equity(today, 10_000.0)
+    journal.record_entry(date_utc=today, signal_bar_utc=f"{today}T07:00:00", side="BUY", lots=0.1,
+                          price=2012.2, sl=2006.8, tp=2023.0, ticket=None, dry_run=True, ok=True,
+                          message="DRY_RUN", reason="asia_breakout_up")
+    journal.event("INFO", "bot started")
+
+    out = build_state(str(cfg_path), limit=10)
+    assert len(out["entries"]) == 1 and out["entries"][0]["side"] == "BUY"
+    assert out["today"]["start_equity"] == 10_000.0
+    assert out["trades_today"] == 1
+    assert len(out["events"]) == 1
+
+
+def test_export_state_kill_switch_flag_matches_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text((ROOT / "config.example.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    assert build_state(str(cfg_path), limit=10)["kill_switch_active"] is False
+    (tmp_path / "STOP").write_text("stopped", encoding="utf-8")
+    assert build_state(str(cfg_path), limit=10)["kill_switch_active"] is True
+
+
+def test_configure_round_trips_through_itself_as_template(tmp_path):
+    """The desktop app re-saves using config.yaml as its own template so an
+    unrelated field change (e.g. risk) doesn't wipe fields the form does not
+    resend, like the MT5 password."""
+    out = tmp_path / "config.yaml"
+    build_and_write = lambda values, template_text: out.write_text(build(values, template_text), encoding="utf-8")
+    build_and_write({"mt5_password": "secret123", "risk": 0.5}, TEMPLATE)
+    build_and_write({"risk": 0.3}, out.read_text(encoding="utf-8"))  # template = itself now
+
+    cfg = load_config_from_text(out.read_text(encoding="utf-8"))
+    assert cfg.mt5.password == "secret123"
+    assert cfg.risk.risk_per_trade_pct == 0.3
