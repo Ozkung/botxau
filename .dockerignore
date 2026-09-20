@@ -1,0 +1,13 @@
+.git/
+.venv/
+__pycache__/
+*.pyc
+desktop/node_modules/
+desktop/dist/
+desktop/out/
+data/*.sqlite
+data/*.csv
+results/
+logs/
+config.yaml
+STOP

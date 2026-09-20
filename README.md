@@ -102,6 +102,26 @@ log จะอยู่ใน `logs/bot.log` และ journal อยู่ใน
 pytest -q
 ```
 
+## Docker (backtest/เครื่องมือเท่านั้น — ไม่ใช่สำหรับรันบอทจริง)
+
+`docker-compose.yml` มีไว้สำหรับ backtest, สร้างข้อมูลตัวอย่าง, preflight check แบบไม่แตะ MT5 และรัน test suite — **ใช้รันบอทฝั่ง live ไม่ได้** เพราะเหตุผลเดียวกับหัวข้อถัดไป: `MetaTrader5` ไม่มี Linux build และต้องคุยกับ terminal ที่เป็น GUI ผ่าน IPC ซึ่ง container ทำไม่ได้เลยไม่ว่าจะรันบน host เป็น OS ไหน
+
+```bash
+cp config.example.yaml config.yaml     # ครั้งแรกครั้งเดียว เหมือน quick start ปกติ
+
+docker compose run --rm test                          # pytest -q
+docker compose up sample-data backtest                 # สร้างข้อมูลตัวอย่างแล้ว backtest ต่อ (รอ sample-data เสร็จก่อนอัตโนมัติ)
+docker compose run --rm doctor                         # เช็ก config/environment (ข้าม MT5)
+
+# backtest กับ CSV ของตัวเอง
+docker compose run --rm backtest python scripts/run_backtest.py \
+  --csv data/XAUUSD_M15.csv --config config.yaml --out results
+```
+
+ผลลัพธ์ (`data/`, `results/`) เขียนกลับมาที่เครื่องจริงผ่าน bind mount ไม่ได้ค้างอยู่ใน container ที่ทิ้งไปหลังรันเสร็จ
+
+> ⚠️ ในเซสชันที่พัฒนาโค้ดนี้ Docker Hub (`docker.io`) ถูกบล็อกโดย network policy ของ sandbox ทำให้ build image ไม่ผ่านจริง (`docker compose config` ตรวจ syntax ผ่าน และคำสั่งข้างในแต่ละ service ก็รันผ่านมาแล้วบน venv ปกตินอก Docker แต่ตัว image เองยังไม่เคย build/run จริงสักครั้ง) — รอบแรกที่ใช้งานควรรัน `docker compose run --rm test` ก่อนเพื่อยืนยันว่า image build และ pytest ผ่านในเครื่องของคุณเอง
+
 ## หมายเหตุเรื่อง hosting
 
 บอทฝั่ง live ต้องรันบน **Windows** เท่านั้น เพราะไลบรารี `MetaTrader5` มีแต่ Windows build และมันคุยกับ MT5 terminal ผ่าน IPC ไม่ใช่ API ที่ยิงตรงเข้าโบรก จึงต้องมี terminal เปิดค้างและ login ไว้ — deploy ลง PaaS ที่เป็น Linux (Render, Railway, Fly.io) ไม่ได้ ส่วน backtester เป็น pandas ล้วน รันได้ทุก OS
