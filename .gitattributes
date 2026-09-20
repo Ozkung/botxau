@@ -1,0 +1,9 @@
+# Later rules win, so the catch-all goes first and the exceptions follow.
+* text=auto eol=lf
+*.png binary
+*.sqlite binary
+
+# Windows shells need CRLF: a .bat with LF endings breaks on labels and goto.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

@@ -289,3 +289,66 @@ def test_engine_moves_stop_to_breakeven():
                       time_server=pd.Timestamp("2026-01-06 07:15"))]
     _engine(b, breakeven_at_r=1.0, force_close_utc=None).step()
     assert b.modified == [(7, 2010.0, 2020.0)]
+
+
+# --- installer ------------------------------------------------------------
+sys.path.insert(0, str(ROOT / "installer"))
+from configure import as_yaml, build, set_value  # noqa: E402
+
+TEMPLATE = (ROOT / "config.example.yaml").read_text(encoding="utf-8")
+
+
+def test_configure_writes_values_and_keeps_comments():
+    out = build({"symbol": "XAUUSDm", "risk": 0.25, "dry_run": False, "max_spread": 0.6}, TEMPLATE)
+    cfg = load_config_from_text(out)
+    assert cfg.symbol == "XAUUSDm" and cfg.dry_run is False
+    assert cfg.risk.risk_per_trade_pct == 0.25 and cfg.risk.max_spread == 0.6
+    # untouched keys keep their defaults, and every comment survives
+    assert cfg.risk.max_trades_per_day == 2
+    assert out.count("#") == TEMPLATE.count("#")
+    assert "# some brokers use XAUUSDm" in out
+
+
+def test_configure_targets_the_right_section():
+    """`server_utc_offset` exists at top level AND under backtest - don't cross them."""
+    out = build({"server_utc_offset": 3}, TEMPLATE)
+    cfg = load_config_from_text(out)
+    assert cfg.backtest.server_utc_offset == 3
+    assert cfg.server_utc_offset == "auto"  # top-level one untouched
+
+
+def test_configure_quotes_awkward_values():
+    assert as_yaml("XAUUSD") == "XAUUSD"           # plain scalar, no quotes
+    assert as_yaml("abc:DEF-1") == '"abc:DEF-1"'   # a colon would break the YAML
+    assert as_yaml(None) == "null" and as_yaml(True) == "true"
+    cfg = load_config_from_text(build({"telegram_token": "123:AAE-xyz", "telegram_chat_id": "-1001234"}, TEMPLATE))
+    assert cfg.notify.telegram_token == "123:AAE-xyz"
+    assert cfg.notify.telegram_chat_id == "-1001234"  # group ids are negative: must not become an int
+
+
+def test_configure_keeps_digit_only_password_a_string():
+    """An all-digits MT5 password read back as an int would break mt5.initialize()."""
+    cfg = load_config_from_text(build({"mt5_password": "80412355", "mt5_login": 80412355}, TEMPLATE))
+    assert cfg.mt5.password == "80412355" and isinstance(cfg.mt5.password, str)
+    assert cfg.mt5.login == 80412355 and isinstance(cfg.mt5.login, int)
+
+
+def test_configure_handles_windows_paths():
+    out = build({"mt5_path": r"C:\Program Files\MetaTrader 5\terminal64.exe"}, TEMPLATE)
+    cfg = load_config_from_text(out)
+    assert cfg.mt5.path == r"C:\Program Files\MetaTrader 5\terminal64.exe"
+
+
+def test_configure_rejects_unknown_key_instead_of_appending():
+    with pytest.raises(KeyError):
+        build({"risk_per_trad_pct": 0.5}, TEMPLATE)
+    with pytest.raises(KeyError):
+        set_value(TEMPLATE.splitlines(), "risk", "no_such_key", 1)
+
+
+def load_config_from_text(text: str):
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8") as fh:
+        fh.write(text)
+    return load_config(fh.name)

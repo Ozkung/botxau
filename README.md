@@ -3,12 +3,38 @@
 บอทเทรดทองคำ XAUUSD อัตโนมัติผ่าน MetaTrader 5 มี backtester ในตัว ใช้โค้ด strategy/risk ชุดเดียวกันทั้งตอน backtest และตอนเทรดจริง
 อ่านสถาปัตยกรรมและรายละเอียดกลยุทธ์ได้ที่ [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
-## Quick start
+## ติดตั้งบน Windows (วิธีที่แนะนำ)
+
+ดาวน์โหลด repo นี้ลงเครื่อง Windows ที่ลง MT5 ไว้แล้ว **ดับเบิลคลิก `install.bat`**
+
+ตัวติดตั้งจะหา Python 3.10+ ให้ สร้าง `.venv` ลงไลบรารีทั้งหมด (รวม `MetaTrader5`) ถามค่าที่จำเป็น (symbol ของโบรก, risk ต่อเทรด, จะส่งออเดอร์จริงไหม, Telegram) เขียน `config.yaml` ให้ วาง shortcut Start/Stop ไว้บน Desktop แล้วรัน preflight check กับ MT5 ที่เปิดอยู่
+
+รันซ้ำได้ปลอดภัย — `config.yaml` เดิมจะไม่ถูกทับถ้าไม่สั่ง และตัวติดตั้ง **ไม่เคยเริ่มเทรดเอง**
+
+| ไฟล์ | ทำอะไร |
+|---|---|
+| `install.bat` | ติดตั้ง/ตั้งค่า (ดับเบิลคลิก) |
+| `installer\doctor.bat` | preflight check กับ MT5 — ไม่ส่งออเดอร์ |
+| `installer\start-bot.bat` | เริ่มบอท |
+| `installer\stop-bot.bat` | kill switch: สร้างไฟล์ `STOP` ห้ามเปิดออเดอร์ใหม่ |
+| `installer\install-task.ps1` | (ทางเลือก) ให้บอทขึ้นเองหลัง VPS รีบูต |
+
+> `stop-bot.bat` **ไม่ได้ปิด position ที่เปิดอยู่** และไม่ได้ฆ่าโปรเซส มันแค่ห้ามเปิดออเดอร์ใหม่ ส่วน position เดิมยังมี SL/TP ฝั่ง server คุ้มครองและบอทยังดูแลต่อ (breakeven, force close) ถ้าจะปิดเดี๋ยวนี้ให้ปิดใน MT5 เอง
+
+`scripts/doctor.py` ตรวจให้ตั้งแต่เวอร์ชัน Python, key ที่พิมพ์ผิดใน config, บัญชีเป็น demo หรือ real, Algo Trading เปิดหรือยัง, symbol มีจริงไหม (ถ้าไม่มีจะลิสต์ชื่อทองที่โบรกมีให้), filling mode, stops level, spread ตอนนี้เทียบ `max_spread`, offset เวลา server เทียบกับใน config, จำนวนแท่งย้อนหลังที่ดึงได้ และที่สำคัญที่สุด — **ล็อตที่บอทจะส่งจริงจากเงินในพอร์ตตอนนี้** ถ้าน้อยกว่าล็อตขั้นต่ำมันจะข้ามทุกสัญญาณ ซึ่งเป็นกับดักที่เจอบ่อยกับพอร์ตเล็ก
+
+## Quick start (ติดตั้งเอง / macOS / Linux)
 
 ```bash
 python -m venv .venv && .venv\Scripts\activate      # (macOS/Linux: source .venv/bin/activate)
 pip install -r requirements.txt
 copy config.example.yaml config.yaml                  # (macOS/Linux: cp)
+```
+
+แก้ค่าใน `config.yaml` ด้วยมือก็ได้ หรือใช้ตัวเขียนที่คงคอมเมนต์ไว้ครบ:
+
+```bash
+python installer/configure.py --symbol XAUUSDm --risk 0.25 --dry-run true
 ```
 
 ### 1) ลอง backtest กับข้อมูลสังเคราะห์ (รันได้ทุก OS)
@@ -61,6 +87,10 @@ log จะอยู่ใน `logs/bot.log` และ journal อยู่ใน
 ```bash
 pytest -q
 ```
+
+## หมายเหตุเรื่อง hosting
+
+บอทฝั่ง live ต้องรันบน **Windows** เท่านั้น เพราะไลบรารี `MetaTrader5` มีแต่ Windows build และมันคุยกับ MT5 terminal ผ่าน IPC ไม่ใช่ API ที่ยิงตรงเข้าโบรก จึงต้องมี terminal เปิดค้างและ login ไว้ — deploy ลง PaaS ที่เป็น Linux (Render, Railway, Fly.io) ไม่ได้ ส่วน backtester เป็น pandas ล้วน รันได้ทุก OS
 
 ## โครงสร้าง
 

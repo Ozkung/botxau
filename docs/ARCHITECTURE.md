@@ -60,6 +60,8 @@ flowchart LR
 
 | ไฟล์ | หน้าที่ |
 |---|---|
+| `install.bat`, `installer/` | ตัวติดตั้งบน Windows: venv, dependencies, เขียน config, shortcut, Scheduled Task |
+| `scripts/doctor.py` | Preflight check ของ environment, config และ MT5 terminal จริง (ไม่ส่งออเดอร์) |
 | `bot/config.py` | โหลด YAML เป็น dataclass และปฏิเสธ key ที่พิมพ์ผิด |
 | `bot/data.py` | โหลด CSV (ทั้ง format ของบอทและไฟล์ export จาก MT5) แล้วแปลงเวลา server เป็น UTC |
 | `bot/indicators.py` | EMA และ ATR (Wilder) |
@@ -129,7 +131,9 @@ flowchart LR
 
 - **Windows VPS** ที่อยู่ใกล้ server โบรก (ส่วนใหญ่อยู่ลอนดอน LD4 หรือนิวยอร์ก NY4) สเปก 2 vCPU / 4 GB เพียงพอ
 - ติดตั้ง MT5 และ login ไว้ เปิด Algo Trading และตั้ง "Max bars in chart" เป็น Unlimited
-- รันบอทเป็น Windows service ด้วย **NSSM** หรือ Task Scheduler ("At startup" + restart on failure) ให้บอทขึ้นเองหลัง VPS รีบูต
+- ติดตั้งบอทด้วย `install.bat` (ดู README) แล้วตรวจด้วย `installer\doctor.bat` ก่อนเริ่มทุกครั้ง
+- ให้บอทขึ้นเองหลังรีบูตด้วย `installer\install-task.ps1` ซึ่งลง Scheduled Task แบบ **"At log on" ไม่ใช่ "At startup"** โดยตั้งใจ เพราะ MT5 เป็นโปรแกรม desktop ที่ต้องมี interactive session ถ้าตั้งเป็น startup แบบรันด้วย SYSTEM มันจะหา terminal ไม่เจอ ดังนั้น VPS ต้องตั้ง auto-logon และให้ MT5 start with Windows ด้วย
+- **Linux/PaaS รันฝั่ง live ไม่ได้** (Render, Railway, Fly.io ฯลฯ) ไลบรารี `MetaTrader5` มีแต่ Windows build และต้องคุยกับ terminal ผ่าน IPC นอกจากนั้นดิสก์แบบ ephemeral จะลบ `journal.sqlite` ที่เก็บ `day_start_equity` กับ `trades_today` ทุกครั้งที่ deploy ซึ่งทำให้ daily loss limit นับใหม่จากศูนย์ และไฟล์ kill switch `STOP` ก็หายไปด้วย ถ้าจำเป็นต้องรันจาก Linux จริงๆ ต้องเขียน broker adapter ตัวใหม่ที่ต่อ MetaApi (ดูตาราง trade-off ข้อ 2)
 - เก็บรหัสผ่านใน environment variable หรือ secret store และห้าม commit `config.yaml`
 - Monitoring: Telegram แจ้งตอนบอทเริ่ม, ตอนเข้า/ออกออเดอร์ และตอนเกิด error อาจเพิ่ม heartbeat ทุกชั่วโมงใน Phase 2
 
