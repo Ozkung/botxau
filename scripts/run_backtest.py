@@ -54,8 +54,10 @@ def main() -> None:
         import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(figsize=(10, 4))
-        ax.plot(res.equity.time_utc, res.equity.balance, linewidth=1.2)
-        ax.set_title(f"{cfg.symbol} {cfg.strategy.name} — balance")
+        ax.plot(res.equity.time_utc, res.equity.equity, linewidth=0.9, label="equity (marked to market)")
+        ax.plot(res.equity.time_utc, res.equity.balance, linewidth=1.3, label="balance (closed trades)")
+        ax.set_title(f"{cfg.symbol} {cfg.strategy.name}")
+        ax.legend(loc="best", fontsize=8)
         ax.grid(alpha=0.3)
         fig.tight_layout()
         fig.savefig(out / "equity.png", dpi=120)

@@ -46,7 +46,9 @@ risk:
 
 backtest:
   initial_balance: 10000
-  spread: 0.25
+  spread: 0.25              # fallback spread (USD) for bars with no spread value
+  spread_source: csv        # csv = use the per-bar spread column | fixed = always use `spread`
+  digits: 2                 # price digits; converts the CSV spread column (points) to USD
   commission_per_lot: 7.0
   contract_size: 100
   volume_min: 0.01

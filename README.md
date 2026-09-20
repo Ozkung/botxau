@@ -31,6 +31,18 @@ python scripts/run_backtest.py --csv data/XAUUSD_M15.csv --config config.yaml --
 ตั้ง `backtest.server_utc_offset` ให้ตรงกับเวลา server ของโบรก (ส่วนใหญ่เป็น 2 หรือ 3)
 ใช้ไฟล์ที่ export จาก MT5 เอง (ไฟล์แบบมีคอลัมน์ `<DATE>` `<TIME>`) ได้เหมือนกัน
 
+### อ่านผลลัพธ์
+
+| ตัวเลขใน `stats.json` | ความหมาย |
+|---|---|
+| `max_drawdown_pct` | drawdown จาก equity ที่ mark-to-market ทุกแท่งด้วยราคาที่แย่ที่สุดในแท่งนั้น นับสิ่งที่ position ที่เปิดอยู่พาเราผ่านมาด้วย — **ใช้ตัวนี้เป็นเกณฑ์** |
+| `max_drawdown_closed_pct` | drawdown จาก balance ที่ปิดเทรดแล้วเท่านั้น จะน้อยกว่าหรือเท่ากับตัวบน |
+| `expectancy_r`, `avg_win_r`, `avg_loss_r` | R หัก commission แล้ว ตรงกับ `pnl` ดังนั้นเทรดที่โดน SL จะแย่กว่า −1R นิดหน่อย |
+| `spread_model` | backtest ใช้ spread จากไหน (คอลัมน์ใน CSV หรือค่าคงที่) พร้อม median/max เป็น USD — เช็กว่าตรงกับบัญชีจริงไหม |
+| `signals_skipped` | สัญญาณที่ถูก guard บล็อก แยกตามเหตุผล รวมถึง `spread too wide` |
+
+`spread` ใน CSV เป็นหน่วย **point** ตามที่ MT5 ให้มา (XAUUSD 2 หลัก: 25 point = $0.25) ถ้าไฟล์ของคุณเก็บเป็น USD อยู่แล้ว ให้ตั้ง `backtest.spread_source: fixed`
+
 ### 3) รันบน demo account
 
 1. เปิด MT5 แล้ว login บัญชี **demo** จากนั้นกดเปิด **Algo Trading**

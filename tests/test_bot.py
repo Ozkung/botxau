@@ -27,7 +27,8 @@ PARAMS = dict(trend_ema=20, atr_period=5, min_range_atr=0.5, max_range_atr=20, s
               sl_atr_mult=1.0, sl_min_atr=0.1, sl_max_atr=10, rr=2.0, breakout_buffer_atr=0.0)
 
 
-def scenario(breakout_close: float = 2012.0, after: list[float] | None = None) -> pd.DataFrame:
+def scenario(breakout_close: float = 2012.0, after: list[float] | None = None,
+             spread_points: list[int] | None = None) -> pd.DataFrame:
     """Two days of M15 bars: day 1 warm-up uptrend; day 2 range 2000-2010 then breakout."""
     rows = []
     t0 = pd.Timestamp("2026-01-05 16:00")  # warm-up after day-1 trade window -> no day-1 signals
@@ -49,6 +50,9 @@ def scenario(breakout_close: float = 2012.0, after: list[float] | None = None) -
         prev = rows[-1][4]
         rows.append((tt, prev, max(prev, c) + 0.3, min(prev, c) - 0.3, c))
     df = pd.DataFrame(rows, columns=["time", "open", "high", "low", "close"])
+    if spread_points is not None:  # pad/trim to length, MT5-style points column
+        pts = (spread_points + [spread_points[-1]] * len(df))[: len(df)]
+        df["spread"] = pts
     return normalise(df, server_utc_offset=0)
 
 
@@ -143,6 +147,70 @@ def test_backtest_runs_on_synthetic_year():
     assert tr.r_multiple.min() >= -1.5
     # at most N trades per UTC day
     assert tr.groupby(tr.entry_time.dt.date).size().max() <= cfg.risk.max_trades_per_day
+
+
+def test_r_multiple_is_net_of_commission():
+    s = create_strategy("session_breakout", PARAMS)
+    df = scenario(2012.0, after=[2014, 2018, 2025, 2040])
+    risk = RiskConfig(breakeven_at_r=None, force_close_utc=None)
+    free = run_backtest(df, s, risk, _bt_cfg()).trades.iloc[0]
+    paid = run_backtest(df, s, risk, _bt_cfg(commission_per_lot=50.0)).trades.iloc[0]
+    assert free.r_multiple == pytest.approx(2.0)
+    assert paid.r_multiple < free.r_multiple      # commission eats into R, not just into pnl
+    risk_usd = paid.risk_dist * paid.lots * 100.0
+    assert paid.r_multiple == pytest.approx(paid.pnl / risk_usd)
+
+
+def test_drawdown_counts_open_position_not_just_closed_trades():
+    """A single winning trade that dipped underwater has 0% closed DD but a real one."""
+    s = create_strategy("session_breakout", PARAMS)
+    df = scenario(2012.0, after=[2011.0, 2014, 2018, 2025, 2040])
+    res = run_backtest(df, s, RiskConfig(breakeven_at_r=None, force_close_utc=None), _bt_cfg())
+    assert res.stats["trades"] == 1 and res.trades.iloc[0].exit_reason == "tp"
+    assert res.stats["max_drawdown_closed_pct"] == 0.0
+    assert res.stats["max_drawdown_pct"] > 0.0
+    assert list(res.equity.columns) == ["time_utc", "balance", "equity"]
+    assert res.equity.equity.min() < res.equity.balance.min()
+
+
+def test_backtest_uses_per_bar_spread_from_csv():
+    s = create_strategy("session_breakout", PARAMS)
+    # 20 points = $0.20 everywhere except the entry bar (the one AFTER the signal)
+    df = scenario(2012.0, after=[2014, 2018, 2025, 2040], spread_points=[20])
+    entry_bar = len(df) - 4
+    df.loc[entry_bar, "spread"] = 35  # $0.35, still under max_spread
+    risk = RiskConfig(breakeven_at_r=None, force_close_utc=None, max_spread=0.40)
+
+    from_csv = run_backtest(df, s, risk, _bt_cfg(spread_source="csv")).trades.iloc[0]
+    fixed = run_backtest(df, s, risk, _bt_cfg(spread_source="fixed", spread=0.20)).trades.iloc[0]
+    assert from_csv.entry == pytest.approx(fixed.entry + 0.15)  # 35 pts vs 20 pts on a long
+
+
+def test_wide_csv_spread_blocks_entry_like_live():
+    s = create_strategy("session_breakout", PARAMS)
+    df = scenario(2012.0, after=[2014, 2018, 2025, 2040], spread_points=[20])
+    signal_bar = len(df) - 5
+    df.loc[signal_bar, "spread"] = 90  # $0.90 > max_spread 0.40
+    risk = RiskConfig(breakeven_at_r=None, force_close_utc=None, max_spread=0.40)
+
+    res = run_backtest(df, s, risk, _bt_cfg(spread_source="csv"))
+    assert res.stats["trades"] == 0
+    assert res.stats["signals_skipped"]["spread too wide"] == 1
+    # the same bars with a fixed narrow spread still trade -> the block came from the column
+    assert run_backtest(df, s, risk, _bt_cfg(spread_source="fixed", spread=0.20)).stats["trades"] == 1
+
+
+def test_spread_falls_back_when_column_missing_or_disabled():
+    s = create_strategy("session_breakout", PARAMS)
+    df = scenario(2012.0, after=[2014, 2018, 2025, 2040])  # no spread column at all
+    res = run_backtest(df, s, RiskConfig(breakeven_at_r=None, force_close_utc=None), _bt_cfg(spread=0.2))
+    assert res.stats["spread_model"]["source"].startswith("fixed")
+    assert res.trades.iloc[0].entry == pytest.approx(df.open.iloc[-4] + 0.2)
+
+
+def test_spread_source_must_be_valid():
+    with pytest.raises(ValueError):
+        BacktestConfig(spread_source="whatever")
 
 
 # --- live engine with a fake broker ---------------------------------------

@@ -65,7 +65,7 @@ flowchart LR
 | `bot/indicators.py` | EMA และ ATR (Wilder) |
 | `bot/strategy/` | `Strategy` base, registry และ `SessionBreakout` |
 | `bot/risk.py` | `position_size()` และ `check_guards()` |
-| `bot/backtest.py` | Backtester และสถิติ (PF, expectancy R, max DD, losing streak) |
+| `bot/backtest.py` | Backtester (spread ต่อแท่ง, equity mark-to-market) และสถิติ (PF, expectancy R, max DD, losing streak) |
 | `bot/broker/mt5_broker.py` | Adapter สำหรับ MT5 (เลือก filling mode อัตโนมัติ, stops level, magic number, ตรวจ offset เวลา server) |
 | `bot/engine.py` | Live loop ที่จัดการ position (breakeven, force close) และสัญญาณใหม่ |
 | `bot/journal.py` | SQLite ที่เก็บ entries, day_state และ events |
@@ -98,7 +98,7 @@ flowchart LR
 | Daily loss limit | 2% | เทียบกับ equity ต้นวัน (UTC) ถ้าถึงแล้วหยุดเปิดออเดอร์ใหม่ทั้งวัน |
 | Max trades/day | 2 | |
 | Max open positions | 1 | |
-| Max spread | 0.40 USD | กันช่วง rollover (ประมาณ 04:00–05:00 น. ไทย) และช่วงข่าวที่ spread ถ่าง |
+| Max spread | 0.40 USD | กันช่วง rollover (ประมาณ 04:00–05:00 น. ไทย) และช่วงข่าวที่ spread ถ่าง มีผลทั้งตอนรันจริงและใน backtest (ถ้า CSV มีคอลัมน์ `spread`) |
 | Force close | 20:00 UTC | ไม่ถือข้ามคืน เลี่ยง swap และ gap |
 | Kill switch | ไฟล์ `STOP` | |
 
@@ -110,6 +110,7 @@ flowchart LR
 
 - **เวลา server:** MT5 ส่งเวลามาเป็นเวลา server ของโบรก (ส่วนใหญ่ GMT+2 ช่วงหนาว และ GMT+3 ช่วง DST US) ตัวบอทจะแปลงเป็น UTC ทุกครั้ง ถ้าตั้ง `server_utc_offset: auto` บอทจะคำนวณ offset จาก tick ล่าสุด แต่**ไฟล์ CSV สำหรับ backtest ใช้ offset ค่าเดียว** จึงคลาดไป 1 ชั่วโมงในช่วงที่เปลี่ยน DST (ใน roadmap มีแผนปรับให้ offset เปลี่ยนตาม DST)
 - **Bid/Ask:** แท่งเทียนใน MT5 เป็นราคา bid ฝั่ง long เข้าที่ ask และออกที่ bid ส่วน short กลับกัน backtester จำลองแบบนี้ไว้แล้ว
+- **Spread ต่อแท่ง:** ไฟล์จาก `fetch_history.py` มีคอลัมน์ `spread` (หน่วย **point** ตามที่ MT5 ให้มา XAUUSD 2 หลัก 25 point = $0.25) backtester ใช้ค่านี้รายแท่งเมื่อ `backtest.spread_source: csv` โดยแปลงด้วย `10^-digits` แท่งที่ไม่มีค่าจะใช้ `backtest.spread` แทน ค่าเดียวกันนี้ถูกส่งเข้า guard `max_spread` ด้วย backtest จึงข้ามแท่ง spread ถ่างแบบเดียวกับตอนรันจริง ตั้ง `spread_source: fixed` ได้ถ้าอยากล็อกเป็นค่าคงที่ ดูสรุปที่ `stats.spread_model` ว่าโหมดไหนถูกใช้และ spread median/max เท่าไร
 - **Stops level:** โบรกบางเจ้ากำหนดระยะ SL/TP ขั้นต่ำ ถ้า SL สั้นกว่านั้น engine จะขยาย SL และ TP ตามสัดส่วนเดิม แล้วคำนวณล็อตใหม่
 - **Filling mode:** เลือก FOK, IOC หรือ RETURN ตามที่ symbol รองรับ (ถ้าเลือกผิดจะได้ error 10030)
 - **Magic number:** บอทจัดการเฉพาะ position ที่ magic ตรงกับของตัวเอง จึงเทรดมือในบัญชีเดียวกันได้
@@ -119,7 +120,7 @@ flowchart LR
 
 1. **Backtest ด้วยข้อมูลจริง 3 ปีขึ้นไป** (`fetch_history.py`) ตั้ง spread/commission ให้ตรงกับบัญชีจริง ถ้าเป็นไปได้ให้เทียบกับ Strategy Tester ของ MT5 ที่ใช้ "Every tick based on real ticks" ด้วย
 2. **In-sample / out-of-sample:** จูนพารามิเตอร์บนข้อมูล 2023–2024 แล้วทดสอบกับ 2025–2026 ครั้งเดียว ถ้า OOS แย่ลงมาก แปลว่า overfit
-3. **เกณฑ์ขั้นต่ำก่อนไปต่อ:** มี 200 เทรดขึ้นไป, PF > 1.3, expectancy > 0.15R, max DD < 15% และผลไม่พังเมื่อขยับพารามิเตอร์ ±20%
+3. **เกณฑ์ขั้นต่ำก่อนไปต่อ:** มี 200 เทรดขึ้นไป, PF > 1.3, expectancy > 0.15R, max DD < 15% และผลไม่พังเมื่อขยับพารามิเตอร์ ±20% โดยใช้ `max_drawdown_pct` (mark-to-market) เป็นเกณฑ์ ไม่ใช่ `max_drawdown_closed_pct` ที่นับเฉพาะเทรดที่ปิดแล้ว และ `expectancy_r` ในรายงานหัก commission แล้ว
 4. **Demo + `dry_run: true`** 2–4 สัปดาห์ เทียบสัญญาณที่ log กับที่ backtest ให้บนช่วงเวลาเดียวกัน ควรตรงกัน
 5. **Demo + `dry_run: false`** 1 เดือน ดู slippage และ spread จริง
 6. **Live ล็อตเล็ก** (0.25% risk) แล้วค่อยเพิ่ม
