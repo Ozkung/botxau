@@ -1,0 +1,59 @@
+# Copy to config.yaml and edit. All session hours are UTC.
+symbol: XAUUSD            # some brokers use XAUUSDm, XAUUSD.r, GOLD ...
+timeframe: M15
+magic: 20260920           # identifies this bot's orders in MT5
+dry_run: true             # true = log signals only. Flip to false ONLY after demo testing.
+poll_seconds: 5
+history_bars: 600
+server_utc_offset: auto   # auto-detect from ticks, or an integer (e.g. 2 winter / 3 summer)
+journal_path: data/journal.sqlite
+kill_switch_file: STOP
+
+mt5:
+  path: null              # e.g. "C:/Program Files/MetaTrader 5/terminal64.exe"
+  login: null             # leave null to use the account already logged in
+  password: null          # prefer env/secret store; never commit this file
+  server: null
+
+strategy:
+  name: session_breakout
+  params:
+    range_start_utc: 0      # Asian range 00:00-07:00 UTC (07:00-14:00 Bangkok)
+    range_end_utc: 7
+    trade_start_utc: 7      # London open
+    trade_end_utc: 16       # no new entries after 16:00 UTC (23:00 Bangkok)
+    trend_ema: 200
+    atr_period: 14
+    breakout_buffer_atr: 0.1
+    min_range_atr: 1.0
+    max_range_atr: 6.0
+    sl_mode: atr            # atr | range | range_mid
+    sl_atr_mult: 1.5
+    sl_min_atr: 0.8
+    sl_max_atr: 3.0
+    rr: 2.0
+    allow_long: true
+    allow_short: true
+
+risk:
+  risk_per_trade_pct: 0.5
+  max_daily_loss_pct: 2.0
+  max_trades_per_day: 2
+  max_open_positions: 1
+  max_spread: 0.40          # USD; gold spreads spike around news/rollover
+  breakeven_at_r: 1.0       # null to disable
+  force_close_utc: 20       # null to hold overnight
+
+backtest:
+  initial_balance: 10000
+  spread: 0.25
+  commission_per_lot: 7.0
+  contract_size: 100
+  volume_min: 0.01
+  volume_step: 0.01
+  volume_max: 50
+  server_utc_offset: 2      # offset of the timestamps in your CSV
+
+notify:
+  telegram_token: null
+  telegram_chat_id: null
