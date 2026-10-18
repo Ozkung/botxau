@@ -1,0 +1,52 @@
+# EMA 200 cross + trailing stop (swing). Copy to config.yaml and edit.
+# Unlike session_breakout this holds positions for days: no force-close, no breakeven.
+symbol: XAUUSD            # some brokers use XAUUSDm, XAUUSD.r, GOLD ...
+timeframe: H4
+magic: 20261018           # different from session_breakout so both can run side by side
+dry_run: true             # true = log signals only. Flip to false ONLY after demo testing.
+poll_seconds: 5
+history_bars: 1000        # EMA 200 needs ~205 bars; extra history lets the EMA settle
+server_utc_offset: auto
+journal_path: data/journal_ema_trail.sqlite
+kill_switch_file: STOP
+
+mt5:
+  path: null
+  login: null
+  password: null          # prefer env/secret store; never commit this file
+  server: null
+
+strategy:
+  name: ema_trail
+  params:
+    ema_period: 200
+    trail_pct: 0.03         # 0.03-0.05 = stop trails 3-5% behind the best price
+    trail_step_pct: 0.001   # modify the broker SL only when it improves by >= 0.1%
+    exit_on_cross: true     # close when price closes back across the EMA
+    allow_long: true
+    allow_short: true
+
+risk:
+  risk_per_trade_pct: 1.0   # with a 3% stop at ~4000 USD, 0.01 lot risks ~120 USD -> needs ~12k equity
+  max_daily_loss_pct: 3.0
+  max_trades_per_day: 2
+  max_open_positions: 1
+  max_spread: 0.80          # USD; H4 entries can wait out a wide-spread moment
+  breakeven_at_r: null      # the trailing stop manages the exit
+  force_close_utc: null     # swing strategy: hold overnight
+
+backtest:
+  initial_balance: 20000
+  spread: 0.30
+  spread_source: csv
+  digits: 2
+  commission_per_lot: 7.0
+  contract_size: 100
+  volume_min: 0.01
+  volume_step: 0.01
+  volume_max: 50
+  server_utc_offset: 2
+
+notify:
+  telegram_token: null
+  telegram_chat_id: null

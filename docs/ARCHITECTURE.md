@@ -68,7 +68,7 @@ flowchart LR
 | `bot/config.py` | โหลด YAML เป็น dataclass และปฏิเสธ key ที่พิมพ์ผิด |
 | `bot/data.py` | โหลด CSV (ทั้ง format ของบอทและไฟล์ export จาก MT5) แล้วแปลงเวลา server เป็น UTC |
 | `bot/indicators.py` | EMA และ ATR (Wilder) |
-| `bot/strategy/` | `Strategy` base, registry และ `SessionBreakout` |
+| `bot/strategy/` | `Strategy` base, registry, `SessionBreakout` และ `EmaTrail` |
 | `bot/risk.py` | `position_size()` และ `check_guards()` |
 | `bot/backtest.py` | Backtester (spread ต่อแท่ง, equity mark-to-market) และสถิติ (PF, expectancy R, max DD, losing streak) |
 | `bot/broker/mt5_broker.py` | Adapter สำหรับ MT5 (เลือก filling mode อัตโนมัติ, stops level, magic number, ตรวจ offset เวลา server) |
@@ -94,6 +94,24 @@ flowchart LR
 พารามิเตอร์ทั้งหมดอยู่ใน `config.yaml` (`strategy.params`) ส่วน strategy ใหม่ให้สร้าง class ที่ implement `prepare()` แล้วลงทะเบียนใน `bot/strategy/__init__.py`
 
 > ⚠️ ยังไม่มีการพิสูจน์ว่ากลยุทธ์นี้มี edge ค่า default เป็นแค่จุดเริ่มต้นที่สมเหตุสมผล ต้อง validate บนข้อมูลจริงของโบรกเกอร์ที่จะใช้ก่อน (ดูข้อ 7) ผลบนข้อมูลสังเคราะห์ (random walk) ออกมา **ขาดทุน** ซึ่งถูกต้องตามที่ควรเป็น เพราะตลาดสุ่มไม่มี edge และต้นทุน spread/commission ก็กินกำไร ใช้ข้อมูลนี้เป็นแค่ sanity check ของระบบ
+
+### 4.1 กลยุทธ์ที่ 2: EMA Cross + Trailing Stop (`ema_trail`, H4)
+
+กลยุทธ์ตามเทรนด์แบบถือหลายวัน ตั้งค่าตัวอย่างอยู่ที่ `config.ema_trail.example.yaml`
+
+| ขั้น | กฎ |
+|---|---|
+| Long | แท่งที่ปิด close ตัดขึ้นเหนือ EMA200 (แท่งก่อนหน้าปิด ≤ EMA) |
+| Short | แท่งที่ปิด close ตัดลงใต้ EMA200 |
+| SL แรก | `trail_pct` ของราคาปิดแท่งสัญญาณ (ค่าเริ่มต้น 3%) |
+| TP | ไม่มี (`tp_dist` = NaN → ส่ง TP = 0 ให้ MT5) |
+| Trailing | SL เดินตามราคาที่ดีที่สุดห่าง `trail_pct` ขยับทางเดียว ฝั่ง live จะ modify SL เมื่อดีขึ้นอย่างน้อย `trail_step_pct` |
+| ออกเมื่อตัดกลับ | `exit_on_cross: true` → สัญญาณฝั่งตรงข้ามปิดไม้เดิม (`signal_exit`) แล้วพิจารณาเปิดฝั่งใหม่ตาม guard ปกติ |
+| Risk | ต้องปิด `breakeven_at_r` และ `force_close_utc` (เป็น `null`) เพราะถือข้ามคืน |
+
+**กลไกที่เพิ่มเข้า framework (ใช้ได้กับทุก strategy):** class attribute บน `Strategy` — `trail_pct`, `trail_step_pct`, `exit_on_opposite_signal` — backtester และ live engine อ่านค่าชุดเดียวกัน backtester เลื่อน trailing ตอนปิดแท่งจาก high (long) / ask-low (short) จึงป้องกันได้ตั้งแต่แท่งถัดไป ส่วน live เลื่อน SL ฝั่ง server ทุกรอบ poll — ถ้าบอทดับ ออเดอร์ยังมี SL ล่าสุดคุ้มครอง
+
+**ข้อควรรู้เรื่องทุน:** stop 3% ที่ทองราว 4,000 USD = ~120 USD ต่อ 0.01 lot ถ้าเสี่ยง 1% ต่อไม้ต้องมี equity ~12,000 USD (5% → ~20,000 USD) ต่ำกว่านั้นทุกสัญญาณจะถูกข้ามด้วยเหตุ `lot below minimum` — `scripts/doctor.py` คำนวณตัวเลขนี้จากราคาและ equity จริงให้
 
 ## 5. Risk Management
 

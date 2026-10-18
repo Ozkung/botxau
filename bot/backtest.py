@@ -10,6 +10,12 @@ Execution model (deliberately conservative):
 * SL/TP checked on bar high/low. If both are touched in the same bar, SL wins.
 * Gaps through SL/TP fill at the bar open (slippage in your disfavour for SL).
 * Breakeven is applied at the end of a bar (cannot help within the same bar).
+* Trailing stops (``Strategy.trail_pct``) ratchet at the end of a bar from the
+  bar's best price (high for longs, ask-low for shorts), so a new stop level
+  only protects from the NEXT bar on — the same-bar order of high/low is unknown.
+* ``tp_dist`` NaN = no take-profit.
+* ``Strategy.exit_on_opposite_signal``: an opposite signal on bar i's close
+  closes the position at bar i+1's open ("signal_exit") before any new entry.
 * Force-close at the open of the first bar whose UTC hour >= force_close_utc.
 * Daily loss guard uses realised balance vs balance at UTC-day start.
 * The equity curve is marked to market every bar at the WORST price the bar
@@ -115,6 +121,8 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, risk: RiskConfig, bt: Bac
     trades: list[Trade] = []
     pos: Optional[Trade] = None
     pending: Optional[int] = None  # index of bar that produced the signal
+    pending_exit = False           # close the open position at the next bar's open
+    trail = strategy.trail_pct
     cur_day = None
     day_start_bal = balance
     trades_today = 0
@@ -135,16 +143,21 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, risk: RiskConfig, bt: Bac
         if days[j] != cur_day:
             cur_day, day_start_bal, trades_today = days[j], balance, 0
 
-        # 1) execute pending entry at this bar's open
+        # 1) execute a pending signal-exit, then a pending entry, at this bar's open
+        if pending_exit and pos is not None:
+            close(pos, o[j] if pos.side > 0 else o[j] + spread[j], times[j], "signal_exit")
+            pos = None
+        pending_exit = False
         if pending is not None and pos is None:
             i = pending
             side = int(sig[i])
             entry = o[j] + spread[j] if side > 0 else o[j]
             lots = position_size(balance, risk.risk_per_trade_pct, sl_d[i], spec)
             if lots > 0:
+                tp = entry + side * tp_d[i] if np.isfinite(tp_d[i]) and tp_d[i] > 0 else np.nan
                 pos = Trade(
                     side=side, entry_time=pd.Timestamp(times[j]), entry=entry,
-                    sl=entry - side * sl_d[i], tp=entry + side * tp_d[i],
+                    sl=entry - side * sl_d[i], tp=tp,
                     lots=lots, risk_dist=sl_d[i], reason=str(reasons[i]),
                 )
                 pos.initial_sl = pos.sl
@@ -160,11 +173,12 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, risk: RiskConfig, bt: Bac
                 close(pos, px, times[j], "force_close")
                 pos = None
             else:
+                has_tp = np.isfinite(pos.tp)
                 if pos.side > 0:  # long: exits on bid
                     hit_sl = lo[j] <= pos.sl
-                    hit_tp = h[j] >= pos.tp
+                    hit_tp = has_tp and h[j] >= pos.tp
                     if hit_sl:
-                        close(pos, min(o[j], pos.sl), times[j], "sl" if pos.sl < pos.entry else "be")
+                        close(pos, min(o[j], pos.sl), times[j], _stop_reason(pos))
                         pos = None
                     elif hit_tp:
                         close(pos, max(o[j], pos.tp), times[j], "tp")
@@ -172,9 +186,9 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, risk: RiskConfig, bt: Bac
                 else:  # short: exits on ask
                     ask_h, ask_l, ask_o = h[j] + spread[j], lo[j] + spread[j], o[j] + spread[j]
                     hit_sl = ask_h >= pos.sl
-                    hit_tp = ask_l <= pos.tp
+                    hit_tp = has_tp and ask_l <= pos.tp
                     if hit_sl:
-                        close(pos, max(ask_o, pos.sl), times[j], "sl" if pos.sl > pos.entry else "be")
+                        close(pos, max(ask_o, pos.sl), times[j], _stop_reason(pos))
                         pos = None
                     elif hit_tp:
                         close(pos, min(ask_o, pos.tp), times[j], "tp")
@@ -186,13 +200,21 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, risk: RiskConfig, bt: Bac
                         pos.sl = pos.entry
                     elif pos.side < 0 and pos.sl > pos.entry and pos.entry - (lo[j] + spread[j]) >= trigger:
                         pos.sl = pos.entry
+                # trailing stop after bar close: only ever tightens
+                if pos is not None and trail:
+                    if pos.side > 0:
+                        pos.sl = max(pos.sl, h[j] * (1 - trail))
+                    else:
+                        pos.sl = min(pos.sl, (lo[j] + spread[j]) * (1 + trail))
 
         # 3) new signal on this bar's close -> pending for next bar
         if sig[j] != 0 and j + 1 < n:
+            if pos is not None and strategy.exit_on_opposite_signal and int(sig[j]) == -pos.side:
+                pending_exit = True  # exits are never blocked by entry guards
             guard = check_guards(
                 GuardState(
                     equity=balance, day_start_equity=day_start_bal, trades_today=trades_today,
-                    open_positions=1 if pos is not None else 0, spread=float(spread[j]), hour_utc=int(hours[j]),
+                    open_positions=1 if pos is not None and not pending_exit else 0, spread=float(spread[j]), hour_utc=int(hours[j]),
                 ),
                 risk,
             )
@@ -217,6 +239,16 @@ def run_backtest(df: pd.DataFrame, strategy: Strategy, risk: RiskConfig, bt: Bac
     stats["spread_model"] = spread_info
     stats["signals_skipped"] = skipped
     return BacktestResult(trades=trades_df, equity=equity_df, stats=stats)
+
+
+def _stop_reason(pos: Trade) -> str:
+    """sl = stop still on the losing side, be = at entry, trail = locked in profit (trailing stop)."""
+    locked = (pos.sl - pos.entry) * pos.side
+    if locked > 0:
+        return "trail"
+    if locked == 0:
+        return "be"
+    return "sl"
 
 
 def _floating(pos: Optional[Trade], low: float, high: float, spread: float, spec: SymbolSpec, bt: BacktestConfig) -> float:

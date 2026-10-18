@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 from typing import Optional
@@ -89,6 +90,9 @@ class LiveEngine:
         bar_close_utc = sig.bar_time_utc + pd.Timedelta(minutes=self.tf_minutes)
         if now_utc - bar_close_utc > pd.Timedelta(minutes=self.tf_minutes):
             return "stale signal"
+        if self.strategy.exit_on_opposite_signal:
+            if self._exit_opposite(positions, sig):
+                positions = self.broker.positions(self.cfg.symbol, self.cfg.magic)
         bar_key = sig.bar_time_utc.isoformat()
         if self.journal.already_traded_bar(bar_key):
             return "already traded"
@@ -113,6 +117,7 @@ class LiveEngine:
             return f"blocked: {guard}"
 
         sl_dist, tp_dist = sig.sl_dist, sig.tp_dist
+        has_tp = math.isfinite(tp_dist) and tp_dist > 0  # NaN = strategy wants no take-profit
         min_dist = self.spec.stops_level * 1.1
         if sl_dist < min_dist:  # broker minimum stop distance
             scale = min_dist / sl_dist
@@ -124,7 +129,7 @@ class LiveEngine:
 
         price = tick.ask if sig.side > 0 else tick.bid
         sl = round(price - sig.side * sl_dist, self.spec.digits)
-        tp = round(price + sig.side * tp_dist, self.spec.digits)
+        tp = round(price + sig.side * tp_dist, self.spec.digits) if has_tp else 0.0  # MT5: 0 = no TP
         comment = f"xau-bot {self.strategy.name}"[:31]
 
         if self.cfg.dry_run:
@@ -138,7 +143,7 @@ class LiveEngine:
             sl=sl, tp=tp, ticket=ticket, dry_run=self.cfg.dry_run, ok=ok, message=message, reason=sig.reason,
         )
         text = (f"{'[DRY] ' if self.cfg.dry_run else ''}{sig.side_name} {self.cfg.symbol} {lots} lot @ {fill:.2f} "
-                f"SL {sl:.2f} TP {tp:.2f} ({sig.reason}) -> {'OK' if ok else 'FAILED'} {message}")
+                f"SL {sl:.2f} TP {f'{tp:.2f}' if has_tp else 'none'} ({sig.reason}) -> {'OK' if ok else 'FAILED'} {message}")
         (log.info if ok else log.error)(text)
         self.notifier.send(text)
         return "order sent" if ok else f"order failed: {message}"
@@ -153,7 +158,11 @@ class LiveEngine:
                 res = self.broker.close_position(self.cfg.symbol, p, self.cfg.magic)
                 self._report(f"Force-close #{p.ticket}", res.ok, res.message)
                 continue
-            if not risk.breakeven_at_r or self.cfg.dry_run:
+            if self.cfg.dry_run:
+                continue
+            if self.strategy.trail_pct:
+                self._trail(p, tick)
+            if not risk.breakeven_at_r:
                 continue
             if p.side > 0 and 0 < p.sl < p.price_open:
                 if tick.bid - p.price_open >= risk.breakeven_at_r * (p.price_open - p.sl):
@@ -163,6 +172,41 @@ class LiveEngine:
                 if p.price_open - tick.ask >= risk.breakeven_at_r * (p.sl - p.price_open):
                     res = self.broker.modify_sltp(self.cfg.symbol, p.ticket, p.price_open, p.tp)
                     self._report(f"Breakeven #{p.ticket}", res.ok, res.message)
+
+    def _trail(self, p: Position, tick: Tick) -> None:
+        """Ratchet the broker-side SL to trail_pct behind the current price (never loosens it)."""
+        trail = self.strategy.trail_pct
+        min_move = tick.bid * self.strategy.trail_step_pct
+        if p.side > 0:
+            cand = round(tick.bid * (1 - trail), self.spec.digits)
+            better = p.sl == 0 or cand > p.sl + min_move
+            room = tick.bid - cand
+        else:
+            cand = round(tick.ask * (1 + trail), self.spec.digits)
+            better = p.sl == 0 or cand < p.sl - min_move
+            room = cand - tick.ask
+        if not better or room < self.spec.stops_level:
+            return
+        res = self.broker.modify_sltp(self.cfg.symbol, p.ticket, cand, p.tp)
+        if res.ok:  # routine — log only, no notification per move
+            log.info("Trail #%s SL %.2f -> %.2f", p.ticket, p.sl, cand)
+            self.journal.event("INFO", f"trail #{p.ticket} SL {p.sl:.2f} -> {cand:.2f}")
+        else:
+            self._report(f"Trail #{p.ticket}", False, res.message)
+
+    def _exit_opposite(self, positions: list[Position], sig) -> bool:
+        """Close positions on the other side of a fresh signal. Returns True if any were touched."""
+        touched = False
+        for p in positions:
+            if p.side != -sig.side:
+                continue
+            touched = True
+            if self.cfg.dry_run:
+                self._report(f"[DRY] Signal-exit #{p.ticket} ({sig.reason})", True, "DRY_RUN")
+                continue
+            res = self.broker.close_position(self.cfg.symbol, p, self.cfg.magic)
+            self._report(f"Signal-exit #{p.ticket} ({sig.reason})", res.ok, res.message)
+        return touched
 
     def _report(self, what: str, ok: bool, message: str) -> None:
         text = f"{what}: {'OK' if ok else 'FAILED'} {message}"

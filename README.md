@@ -96,6 +96,26 @@ python scripts/run_live.py --config config.yaml
 log จะอยู่ใน `logs/bot.log` และ journal อยู่ใน `data/journal.sqlite`
 ถ้าต้องการหยุดเปิดออเดอร์ใหม่ทันที ให้สร้างไฟล์ชื่อ `STOP` ไว้ในโฟลเดอร์ที่รันบอท
 
+## Strategy ที่มีให้เลือก
+
+| `strategy.name` | แนว | config ตัวอย่าง |
+|---|---|---|
+| `session_breakout` | Asian range breakout, M15, TP 2R, ปิดก่อนสิ้นวัน | `config.example.yaml` |
+| `ema_trail` | EMA200 cross + trailing stop 3–5%, H4, ถือหลายวัน | `config.ema_trail.example.yaml` |
+
+ใช้ `ema_trail`:
+
+```bash
+copy config.ema_trail.example.yaml config.yaml        # (macOS/Linux: cp)
+python scripts/fetch_history.py --config config.yaml --from 2022-01-01 --to 2026-10-01 --out data/XAUUSD_H4.csv
+python scripts/run_backtest.py --csv data/XAUUSD_H4.csv --config config.yaml --out results_ema
+```
+
+ลองระยะ trailing ต่างกันได้ที่ `strategy.params.trail_pct` (0.03–0.05) ส่วน `exit_on_cross: false` จะให้ trailing เป็นตัวออกอย่างเดียว ใน `stats.json` ดู `exit_reasons` ว่าไม้ส่วนใหญ่ออกด้วย `trail` หรือ `signal_exit`
+ต้องใช้ข้อมูล **H4** ให้ตรงกับ `timeframe` ใน config — ข้อมูลตัวอย่างจาก `make_sample_data.py` เป็น M15 ใช้ได้แค่เช็กว่า pipeline รัน
+
+> ⚠️ stop 3% ของราคาทองเป็นระยะกว้างมาก บัญชีเล็กจะเทรด 0.01 lot ไม่ได้โดยไม่เกิน `risk_per_trade_pct` รัน `python scripts/doctor.py --config config.yaml` เพื่อดูล็อตที่บอทจะส่งจริงจากเงินในพอร์ตตอนนี้
+
 ## Tests
 
 ```bash
@@ -130,7 +150,7 @@ docker compose run --rm backtest python scripts/run_backtest.py \
 
 ```
 bot/
-  strategy/         base.py, session_breakout.py, registry
+  strategy/         base.py, session_breakout.py, ema_trail.py, registry
   broker/           base.py (interface), mt5_broker.py
   backtest.py       bar-by-bar simulator + stats
   engine.py         live loop
