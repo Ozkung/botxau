@@ -251,18 +251,26 @@ def _check_market(r: Report, broker, mt5, cfg, spec) -> None:
 
 def _check_sizing(r: Report, broker, cfg, spec, bars) -> None:
     """The number that actually matters: would a real signal produce a valid lot?"""
+    import pandas as pd
+
     from bot.data import normalise
     from bot.risk import position_size
     from bot.strategy import create_strategy
 
     strategy = create_strategy(cfg.strategy.name, cfg.strategy.params)
     prepared = strategy.prepare(normalise(bars, broker.server_utc_offset_hours(cfg.symbol)))
-    atr = prepared["atr"].dropna()
-    if atr.empty:
-        r.warn("not enough history to estimate ATR - cannot check lot sizing")
-        return
-    typical_atr = float(atr.median())
-    sl_dist = typical_atr * float(cfg.strategy.params.get("sl_atr_mult", 1.5))
+    if strategy.trail_pct:  # percentage stop: distance scales with price, not volatility
+        last = float(prepared["close"].iloc[-1])
+        sl_dist = last * strategy.trail_pct
+        basis = f"price {last:.2f} x {strategy.trail_pct:.1%}"
+    else:
+        atr = prepared["atr"].dropna() if "atr" in prepared else pd.Series(dtype=float)
+        if atr.empty:
+            r.warn("not enough history to estimate ATR - cannot check lot sizing")
+            return
+        typical_atr = float(atr.median())
+        sl_dist = typical_atr * float(cfg.strategy.params.get("sl_atr_mult", 1.5))
+        basis = f"ATR {typical_atr:.2f}"
     equity = broker.equity()
     lots = position_size(equity, cfg.risk.risk_per_trade_pct, sl_dist, spec)
     risk_usd = equity * cfg.risk.risk_per_trade_pct / 100.0
@@ -272,7 +280,7 @@ def _check_sizing(r: Report, broker, cfg, spec, bars) -> None:
         r.info("fund the account, raise risk_per_trade_pct, or use a cent account")
     else:
         actual = lots * sl_dist * spec.contract_size
-        r.ok(f"typical trade: ATR {typical_atr:.2f} -> stop {sl_dist:.2f}, {lots} lots, "
+        r.ok(f"typical trade: {basis} -> stop {sl_dist:.2f}, {lots} lots, "
              f"risking {actual:.2f} of {risk_usd:.2f} budget ({actual / equity * 100:.2f}% of equity)")
 
 

@@ -415,3 +415,149 @@ def test_configure_round_trips_through_itself_as_template(tmp_path):
     cfg = load_config_from_text(out.read_text(encoding="utf-8"))
     assert cfg.mt5.password == "secret123"
     assert cfg.risk.risk_per_trade_pct == 0.3
+
+
+# --- ema_trail strategy ---------------------------------------------------
+EMA_PARAMS = dict(ema_period=5, trail_pct=0.03, trail_step_pct=0.001)
+
+
+def closes_to_bars(closes: list[float], start: str = "2026-01-05 00:00", minutes: int = 15) -> pd.DataFrame:
+    rows, prev = [], closes[0]
+    t0 = pd.Timestamp(start)
+    for k, c in enumerate(closes):
+        rows.append((t0 + pd.Timedelta(minutes=minutes * k), prev, max(prev, c) + 0.3, min(prev, c) - 0.3, c))
+        prev = c
+    return normalise(pd.DataFrame(rows, columns=["time", "open", "high", "low", "close"]), server_utc_offset=0)
+
+
+FLAT = [2000.0] * 20
+NO_GUARDS = dict(breakeven_at_r=None, force_close_utc=None, max_trades_per_day=99)
+
+
+def test_ema_trail_registered_and_validates_params():
+    s = create_strategy("ema_trail", {"trail_pct": 0.05})
+    assert s.trail_pct == 0.05 and s.exit_on_opposite_signal is True
+    with pytest.raises(ValueError):
+        create_strategy("ema_trail", {"trail_pct": 3})  # percent instead of fraction
+    with pytest.raises(ValueError):
+        create_strategy("ema_trail", {"rr": 2})
+    # the breakout strategy keeps a fixed stop
+    assert create_strategy("session_breakout", PARAMS).trail_pct is None
+
+
+def test_ema_trail_signals_only_on_the_cross_bar():
+    out = create_strategy("ema_trail", EMA_PARAMS).prepare(closes_to_bars(FLAT + [2010, 2015, 2020]))
+    sig = out[out.signal != 0]
+    assert len(sig) == 1 and sig.iloc[0].signal == 1 and sig.iloc[0].close == 2010
+    assert sig.iloc[0].sl_dist == pytest.approx(2010 * 0.03)
+    assert np.isnan(sig.iloc[0].tp_dist)  # no take-profit
+    down = create_strategy("ema_trail", EMA_PARAMS).prepare(closes_to_bars(FLAT + [1990, 1985]))
+    assert down[down.signal != 0].signal.tolist() == [-1]
+    longs_only = create_strategy("ema_trail", {**EMA_PARAMS, "allow_short": False})
+    assert (longs_only.prepare(closes_to_bars(FLAT + [1990, 1985])).signal == 0).all()
+
+
+def test_backtest_trailing_stop_locks_in_profit():
+    s = create_strategy("ema_trail", {**EMA_PARAMS, "exit_on_cross": False})
+    df = closes_to_bars(FLAT + [2010, 2050, 2100, 2150, 2200, 2190, 2100, 2000])
+    res = run_backtest(df, s, RiskConfig(risk_per_trade_pct=1.0, **NO_GUARDS), _bt_cfg(initial_balance=100_000))
+    t = res.trades.iloc[0]  # (the 2100 close also crosses below the EMA -> a later short)
+    assert t.side == 1 and t.exit_reason == "trail"
+    best_high = 2200 + 0.3
+    assert t.exit == pytest.approx(best_high * 0.97)   # trailed 3% behind the best high
+    assert t.sl > t.initial_sl and np.isnan(t.tp)
+    assert t.pnl > 0 and t.r_multiple > 1
+
+
+def test_backtest_initial_stop_without_trailing_profit_is_sl():
+    s = create_strategy("ema_trail", {**EMA_PARAMS, "exit_on_cross": False})
+    df = closes_to_bars(FLAT + [2010, 2005, 1900])
+    t = run_backtest(df, s, RiskConfig(risk_per_trade_pct=1.0, **NO_GUARDS), _bt_cfg(initial_balance=100_000)).trades.iloc[0]
+    assert t.exit_reason == "sl" and t.r_multiple < -0.95  # ~-1R (stop may have trailed a few cents)
+
+
+def test_backtest_opposite_cross_exits_then_reverses():
+    s = create_strategy("ema_trail", EMA_PARAMS)
+    df = closes_to_bars(FLAT + [2010, 2030, 2050, 2040, 2020, 2010, 2005, 2000])
+    res = run_backtest(df, s, RiskConfig(risk_per_trade_pct=1.0, **NO_GUARDS), _bt_cfg(initial_balance=100_000))
+    tr = res.trades
+    first = tr.iloc[0]
+    assert first.side == 1 and first.exit_reason == "signal_exit"
+    second = tr.iloc[1]
+    assert second.side == -1 and second.entry_time == first.exit_time  # reversed at the same open
+
+
+def test_backtest_ema_trail_skips_when_min_lot_exceeds_risk():
+    s = create_strategy("ema_trail", EMA_PARAMS)
+    df = closes_to_bars(FLAT + [2010, 2050])
+    res = run_backtest(df, s, RiskConfig(risk_per_trade_pct=1.0, **NO_GUARDS), _bt_cfg(initial_balance=1_000))
+    # 3% of 2010 = ~60 USD stop -> 0.01 lot risks ~60 USD = 6% of 1000
+    assert res.stats["trades"] == 0
+    assert res.stats["signals_skipped"] == {"lot below minimum": 1}
+
+
+class ClosingBroker(FakeBroker):
+    def close_position(self, symbol, position, magic):
+        self.pos = [p for p in self.pos if p.ticket != position.ticket]
+        self.closed = getattr(self, "closed", []) + [position.ticket]
+        return OrderResult(True, position.ticket, None, "ok")
+
+
+def _trail_engine(broker, **params):
+    cfg = BotConfig(server_utc_offset=0, history_bars=200, kill_switch_file="__no_such_file__",
+                    dry_run=False, risk=RiskConfig(risk_per_trade_pct=1.0, **NO_GUARDS))
+    return LiveEngine(cfg, broker, create_strategy("ema_trail", {**EMA_PARAMS, **params}), Journal(":memory:"))
+
+
+def test_engine_trails_stop_and_never_loosens():
+    b = ClosingBroker(closes_to_bars(FLAT), bid=2200.0)  # flat -> no signal
+    b.pos = [Position(ticket=9, side=1, lots=0.1, price_open=2010.0, sl=1950.0, tp=0.0,
+                      time_server=pd.Timestamp("2026-01-05 05:00"))]
+    eng = _trail_engine(b)
+    eng.step()
+    assert b.modified == [(9, round(2200 * 0.97, 2), 0.0)]
+    # price pulls back: stop must stay where it is
+    b.modified.clear()
+    b.pos = [Position(ticket=9, side=1, lots=0.1, price_open=2010.0, sl=2134.0, tp=0.0,
+                      time_server=pd.Timestamp("2026-01-05 05:00"))]
+    b.bid = 2150.0
+    eng._manage(b.pos, b.tick("XAUUSD"), pd.Timestamp("2026-01-05 06:00"))
+    assert b.modified == []
+
+
+def test_engine_trailing_respects_step_for_shorts():
+    b = ClosingBroker(closes_to_bars(FLAT), bid=1800.0, spread=0.2)
+    eng = _trail_engine(b)
+    tick = b.tick("XAUUSD")
+    cand = round(1800.2 * 1.03, 2)
+    short = Position(ticket=4, side=-1, lots=0.1, price_open=1900.0, sl=cand + 1.0, tp=0.0,
+                     time_server=pd.Timestamp("2026-01-05 05:00"))
+    eng.spec = SymbolSpec(stops_level=0.5)
+    eng._manage([short], tick, pd.Timestamp("2026-01-05 06:00"))
+    assert b.modified == []  # 1.0 USD better is below the 0.1% (~1.8 USD) step
+    eng._manage([Position(**{**short.__dict__, "sl": cand + 5.0})], tick, pd.Timestamp("2026-01-05 06:00"))
+    assert b.modified == [(4, cand, 0.0)]
+
+
+def test_engine_opposite_cross_closes_then_opens_reverse_without_tp():
+    b = ClosingBroker(closes_to_bars(FLAT + [1990.0]), bid=1990.0)
+    b.pos = [Position(ticket=5, side=1, lots=0.1, price_open=2010.0, sl=1950.0, tp=0.0,
+                      time_server=pd.Timestamp("2026-01-05 03:00"))]
+    eng = _trail_engine(b)
+    b._equity = 100_000
+    assert eng.step() == "order sent"
+    assert b.closed == [5]
+    o = b.orders[0]
+    assert o["side"] == -1 and o["tp"] == 0.0
+    assert o["sl"] == pytest.approx(1990.0 + 1990.0 * 0.03, abs=0.01)
+
+
+def test_ema_trail_example_config_loads_and_backtests():
+    cfg = load_config(ROOT / "config.ema_trail.example.yaml")
+    s = create_strategy(cfg.strategy.name, cfg.strategy.params)
+    assert cfg.risk.force_close_utc is None and cfg.risk.breakeven_at_r is None
+    assert cfg.history_bars >= s.min_bars + 96
+    df = normalise(synthetic_bars(days=200, seed=5), 2)
+    res = run_backtest(df, s, cfg.risk, cfg.backtest)
+    if res.stats["trades"]:
+        assert set(res.trades.exit_reason) <= {"sl", "trail", "signal_exit", "end_of_data", "be"}
